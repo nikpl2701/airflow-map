@@ -228,6 +228,10 @@ async function start() {
     },
   });
 
+  // globus czasem nie rysuje świeżo dodanych warstw — ponowne ustawienie projekcji to wymusza
+  map.setProjection({ type: 'globe' });
+  map.triggerRepaint();
+
   const slider = document.getElementById('slider');
   slider.max = String(KROKI.length - 1);
   pokazInfo(first.properties);
