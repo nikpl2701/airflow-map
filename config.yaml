@@ -1,0 +1,43 @@
+# airflow-map — konfiguracja
+
+obszar:
+  # Europa, siatka docelowa 0.25°, lat rosnąco
+  lat_min: 30.0
+  lat_max: 72.0
+  lon_min: -15.0
+  lon_max: 40.0
+  rozdzielczosc: 0.25
+
+poziom:
+  # hPa; poziom na którym liczymy adwekcję i linie prądu
+  glowny: 850
+  mslp: true          # niże/wyże liczone z ciśnienia na poziomie morza
+
+progi:
+  wygladzanie_sigma: 6        # pkt siatki, ~150 km przy 0.25°
+  adwekcja_min: 1.5           # K/dobę — próg klasyfikacji frontu
+  trasa_min_km: 800           # min. długość linii prądu żeby ją narysować
+  predkosc_min_ms: 3          # poniżej tego wiatr uznajemy za "cichy", przerywamy trasowanie
+  konsensus_min_modeli: 2     # ile modeli musi się zgadzać żeby oznaczyć strefę jako pewną
+
+kroki_czasowe:
+  start_h: 0
+  koniec_h: 72
+  krok_h: 3
+
+modele:
+  # wlaczony: true/false — czy pobierać i liczyć dany model
+  gfs:
+    wlaczony: true
+    cykle: ["00", "06", "12", "18"]
+  icon_eu:
+    wlaczony: true
+    cykle: ["00", "06", "12", "18"]
+  ecmwf:
+    wlaczony: false     # wyłączony: serwery ECMWF często odrzucają pobieranie (429/503)
+    cykle: ["00", "12"]
+
+wyjscie:
+  geojson_dir: "data/geojson"
+  png_dir: "data/png"
+  web_dir: "render/web/data"

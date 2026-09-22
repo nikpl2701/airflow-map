@@ -1,0 +1,11 @@
+numpy
+scipy
+xarray
+eccodes>=2.45
+cfgrib
+requests
+pyyaml
+matplotlib
+cartopy
+ecmwf-opendata
+tzdata
