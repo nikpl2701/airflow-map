@@ -37,6 +37,35 @@
   #dni { position: relative; height: 16px; margin: 2px 0 0 44px; color: #9aa3b2; font-size: 11px; }
   #dni span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
   #dni span::before { content: ""; position: absolute; left: 50%; top: -5px; height: 4px; border-left: 1px solid #667; }
+
+  /* prognoza punktowa (prawa strona) */
+  #punkt { right: 12px; top: 12px; width: 390px; max-height: calc(100% - 150px); display: flex; flex-direction: column; }
+  #punkt[hidden] { display: none; }
+  #punkt h2 { font-size: 14px; margin: 0; font-weight: 600; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  #punkt h2 small { font-weight: 400; color: #9aa3b2; font-size: 11px; }
+  #p-teraz { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin: 8px 0; }
+  .kafel { background: rgba(255,255,255,.05); border-radius: 6px; padding: 6px 8px; }
+  .kafel .e { color: #9aa3b2; font-size: 11px; }
+  .kafel .w { font-size: 17px; font-weight: 600; color: #fff; font-variant-numeric: tabular-nums; }
+  .kafel .w small { font-size: 11px; font-weight: 400; color: #9aa3b2; }
+  #p-tab-wrap { overflow-y: auto; min-height: 0; border-top: 1px solid rgba(255,255,255,.12); }
+  #p-tab { width: 100%; border-collapse: collapse; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  #p-tab th { position: sticky; top: 0; background: #0b1020; color: #9aa3b2; font-weight: 500; text-align: right; padding: 4px 4px; }
+  #p-tab th:first-child, #p-tab td:first-child { text-align: left; }
+  #p-tab td { text-align: right; padding: 3px 4px; border-top: 1px solid rgba(255,255,255,.05); white-space: nowrap; }
+  #p-tab tr { cursor: pointer; }
+  #p-tab tbody tr:hover { background: rgba(255,255,255,.06); }
+  #p-tab tr.akt { background: rgba(231,76,60,.28); }
+  #p-tab tr.noc td:first-child { color: #9aa3b2; }
+  .deszcz { color: #5dade2; }
+  .strz { display: inline-block; }
+  #p-zwin { background: none; border: 0; color: #9aa3b2; cursor: pointer; font-size: 12px; padding: 0; }
+  #punkt.zwiniety #p-tab-wrap { display: none; }
+  @media (max-width: 760px) {
+    #punkt { left: 12px; right: 12px; width: auto; top: auto; bottom: 150px; max-height: 40%; }
+    .kafel .w { font-size: 15px; }
+    #info { display: none; }
+  }
 </style>
 </head>
 <body>
@@ -54,6 +83,22 @@
     <div><span class="kreska" style="background:#aaa;opacity:.45"></span>bladsza linia = modele się nie zgadzają</div>
     <div><span class="litera" style="color:#3498db">N</span>niż</div>
     <div><span class="litera" style="color:#e74c3c">W</span>wyż</div>
+  </div>
+</div>
+
+<div id="punkt" class="box" hidden>
+  <h2><span id="p-nazwa">Łomża</span> <small id="p-model"></small>
+    <button id="p-zwin" title="Zwiń / rozwiń tabelę">tabela ▾</button></h2>
+  <div id="p-teraz"></div>
+  <div id="p-tab-wrap">
+    <table id="p-tab">
+      <thead><tr>
+        <th>czas</th><th title="temperatura">°C</th><th title="temperatura odczuwalna">odcz.</th>
+        <th title="opad w kroku (3 h)">opad</th><th title="opad od startu prognozy">Σ opad</th>
+        <th title="ciśnienie na poziomie morza">hPa</th><th title="wiatr / porywy">wiatr m/s</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
   </div>
 </div>
 
@@ -163,6 +208,80 @@ function rysujDni() {
   }
 }
 
+// ---------- prognoza punktowa (tabela po prawej) ----------
+let PUNKT = null;
+let PUNKT_KLIK = () => {};
+const fmtKrotki = new Intl.DateTimeFormat('pl-PL', { timeZone: STREFA, weekday: 'short', day: 'numeric' });
+const KIERUNKI =['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+const fmt = (v, n = 1) => (v === null || v === undefined) ? '—' : Number(v).toFixed(n).replace('.', ',');
+const kierunek = st => st === null || st === undefined ? '' : KIERUNKI[Math.round(st / 45) % 8];
+// strzałka "dokąd wieje" (kierunek meteorologiczny mówi skąd, więc +180°)
+const strzWiatru = st => st === null || st === undefined ? ''
+  : `<span class="strz" style="transform:rotate(${(st + 180) % 360}deg)" title="wiatr z ${kierunek(st)}">↑</span>`;
+
+async function wczytajPunkt() {
+  try {
+    PUNKT = await loadJSON('data/punkt.json');
+  } catch (e) {
+    return;   // brak pliku — panel zostaje ukryty
+  }
+  // rysuj tylko kroki, które są też na mapie
+  PUNKT.kroki = PUNKT.kroki.filter(k => KROKI.includes(k.h));
+  document.getElementById('punkt').hidden = false;
+  document.getElementById('p-nazwa').textContent = PUNKT.nazwa;
+  document.getElementById('p-model').textContent =
+    `${NAZWY_MODELI[PUNKT.model] || PUNKT.model} · ${PUNKT.zrodlo}`;
+  if (DOM_MARKER) DOM_MARKER.setLngLat([PUNKT.lon, PUNKT.lat]).getPopup().setText(PUNKT.nazwa);
+
+  const tb = document.querySelector('#p-tab tbody');
+  tb.innerHTML = '';
+  let poprzDzien = '';
+  PUNKT.kroki.forEach(k => {
+    const t = new Date(k.czas_iso);
+    const g = fmtGodz.format(t);
+    const dz = fmtKrotki.format(t).replace('.', '').replace(',', '');
+    const godz = Number(g.slice(0, 2));
+    const tr = document.createElement('tr');
+    tr.dataset.h = k.h;
+    if (godz < 6 || godz >= 21) tr.className = 'noc';
+    tr.innerHTML =
+      `<td>${dz !== poprzDzien ? dz + ' ' : ''}${g}</td>` +
+      `<td>${fmt(k.temp)}</td><td>${fmt(k.odczuwalna)}</td>` +
+      `<td class="${k.opad > 0 ? 'deszcz' : ''}">${k.opad > 0 ? fmt(k.opad) : '·'}</td>` +
+      `<td class="${k.opad_suma > 0 ? 'deszcz' : ''}">${fmt(k.opad_suma)}</td>` +
+      `<td>${fmt(k.cisnienie, 0)}</td>` +
+      `<td>${strzWiatru(k.kierunek)} ${fmt(k.wiatr)}/${fmt(k.porywy, 0)}</td>`;
+    tr.addEventListener('click', () => {
+      const i = KROKI.indexOf(k.h);
+      if (i >= 0) PUNKT_KLIK(i);
+    });
+    tb.appendChild(tr);
+    poprzDzien = dz;
+  });
+
+  const panel = document.getElementById('punkt');
+  document.getElementById('p-zwin').addEventListener('click', () => panel.classList.toggle('zwiniety'));
+}
+
+function pokazPunkt(h) {
+  if (!PUNKT) return;
+  const k = PUNKT.kroki.find(x => x.h === h);
+  const el = document.getElementById('p-teraz');
+  if (!k) { el.innerHTML = '<div class="kafel">brak danych dla tego kroku</div>'; return; }
+  el.innerHTML =
+    `<div class="kafel"><div class="e">temperatura</div><div class="w">${fmt(k.temp)}<small> °C</small></div></div>` +
+    `<div class="kafel"><div class="e">odczuwalna</div><div class="w">${fmt(k.odczuwalna)}<small> °C</small></div></div>` +
+    `<div class="kafel"><div class="e">ciśnienie</div><div class="w">${fmt(k.cisnienie, 0)}<small> hPa</small></div></div>` +
+    `<div class="kafel"><div class="e">opad (3 h)</div><div class="w">${fmt(k.opad)}<small> mm</small></div></div>` +
+    `<div class="kafel"><div class="e">opad od startu</div><div class="w">${fmt(k.opad_suma)}<small> mm</small></div></div>` +
+    `<div class="kafel"><div class="e">wiatr ${kierunek(k.kierunek)} ${strzWiatru(k.kierunek)}</div><div class="w">${fmt(k.wiatr)}<small> m/s</small></div><div class="e">porywy ${fmt(k.porywy, 0)} m/s</div></div>`;
+  document.querySelectorAll('#p-tab tbody tr').forEach(tr => {
+    const akt = Number(tr.dataset.h) === h;
+    tr.classList.toggle('akt', akt);
+    if (akt) tr.scrollIntoView({ block: 'nearest' });
+  });
+}
+
 async function start() {
   try {
     META = await loadJSON('data/meta.json');
@@ -239,10 +358,15 @@ async function start() {
   rysujDni();
   window.addEventListener('resize', rysujDni);
 
+  await wczytajPunkt();
+  PUNKT_KLIK = i => { slider.value = String(i); ustaw(i); };
+  pokazPunkt(KROKI[0]);
+
   let wczytywany = 0;
   async function ustaw(i) {
     const h = KROKI[i];
     pokazCzas(h);
+    pokazPunkt(h);
     const nr = ++wczytywany;
     try {
       const dane = await loadJSON(stepUrl(h));
@@ -269,7 +393,7 @@ async function start() {
 
 // pinezka: mój dom (ustawiona na centrum miasta — strona jest publiczna)
 const DOM = { nazwa: 'Łomża', lon: 22.06, lat: 53.18 };
-new maplibregl.Marker({ color: '#f1c40f', scale: 0.8 })
+const DOM_MARKER = new maplibregl.Marker({ color: '#f1c40f', scale: 0.8 })
   .setLngLat([DOM.lon, DOM.lat])
   .setPopup(new maplibregl.Popup({ offset: 24, closeButton: false }).setText(DOM.nazwa))
   .addTo(map);
