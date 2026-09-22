@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<title>airflow-map</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
+<link href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css" rel="stylesheet">
+<style>
+  html, body, #map { height: 100%; margin: 0; background: #000; }
+  body { font: 13px/1.4 system-ui, sans-serif; color: #e8e8e8; }
+  .box {
+    position: absolute; background: rgba(8, 12, 24, .82);
+    border: 1px solid rgba(255,255,255,.12); border-radius: 8px;
+    padding: 10px 12px; backdrop-filter: blur(4px);
+  }
+  #info { left: 12px; top: 12px; max-width: 290px; }
+  #info h1 { font-size: 14px; margin: 0 0 6px; font-weight: 600; }
+  #info .row { display: flex; gap: 6px; }
+  #info .k { color: #9aa3b2; min-width: 92px; }
+  #legenda { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,.12); }
+  #legenda div { display: flex; align-items: center; gap: 8px; margin: 2px 0; }
+  .kreska { width: 26px; height: 3px; border-radius: 2px; }
+  .litera { width: 26px; text-align: center; font-weight: 700; font-size: 15px; }
+
+  #czas { left: 12px; right: 12px; bottom: 20px; }
+  #czas-gora { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
+  #teraz { font-size: 20px; font-weight: 600; color: #fff; }
+  #wzgl { color: #9aa3b2; }
+  #suwak-row { display: flex; align-items: center; gap: 10px; }
+  #play {
+    background: #26324a; color: #fff; border: 0; border-radius: 6px;
+    width: 34px; height: 30px; font-size: 14px; cursor: pointer; flex: none;
+  }
+  #play:hover { background: #34436a; }
+  #slider { flex: 1; accent-color: #e74c3c; }
+  #dni { position: relative; height: 16px; margin: 2px 0 0 44px; color: #9aa3b2; font-size: 11px; }
+  #dni span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+  #dni span::before { content: ""; position: absolute; left: 50%; top: -5px; height: 4px; border-left: 1px solid #667; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div id="info" class="box">
+  <h1>Przepływ powietrza na 850 hPa</h1>
+  <div class="row"><span class="k">Start prognozy</span><span id="i-przebieg">—</span></div>
+  <div class="row"><span class="k">Policzono</span><span id="i-obliczono">—</span></div>
+  <div class="row"><span class="k">Modele</span><span id="i-modele">—</span></div>
+  <div class="row"><span class="k">Kroki</span><span id="i-kroki">—</span></div>
+  <div id="legenda">
+    <div><span class="kreska" style="background:#e74c3c"></span>napływ ciepłego powietrza</div>
+    <div><span class="kreska" style="background:#3498db"></span>napływ zimnego powietrza</div>
+    <div><span class="kreska" style="background:#aaa;opacity:.45"></span>bladsza linia = modele się nie zgadzają</div>
+    <div><span class="litera" style="color:#3498db">N</span>niż</div>
+    <div><span class="litera" style="color:#e74c3c">W</span>wyż</div>
+  </div>
+</div>
+
+<div id="czas" class="box">
+  <div id="czas-gora">
+    <span id="teraz">Wczytywanie…</span>
+    <span id="wzgl"></span>
+  </div>
+  <div id="suwak-row">
+    <button id="play" title="Odtwarzaj / pauza">▶</button>
+    <input id="slider" type="range" min="0" max="0" value="0" step="1">
+  </div>
+  <div id="dni"></div>
+</div>
+
+<script>
+const STREFA = 'Europe/Warsaw';
+const fmtDzien = new Intl.DateTimeFormat('pl-PL', { timeZone: STREFA, weekday: 'short', day: '2-digit', month: '2-digit' });
+const fmtGodz = new Intl.DateTimeFormat('pl-PL', { timeZone: STREFA, hour: '2-digit', minute: '2-digit' });
+const fmtUTC = new Intl.DateTimeFormat('pl-PL', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit' });
+const NAZWY_MODELI = { gfs: 'GFS', icon_eu: 'ICON-EU', ecmwf: 'ECMWF' };
+
+const pelna = d => `${fmtDzien.format(d)}, ${fmtGodz.format(d)}`;
+
+let META = null;      // z data/meta.json
+let KROKI = [];
+
+const map = new maplibregl.Map({
+  container: 'map',
+  style: 'https://demotiles.maplibre.org/style.json',
+  center: [15, 50],
+  zoom: 2.2,
+});
+
+map.on('style.load', () => map.setProjection({ type: 'globe' }));
+
+const stepUrl = h => `data/step_${String(h).padStart(3, '0')}.geojson`;
+
+async function loadJSON(url) {
+  const resp = await fetch(url, { cache: 'no-store' });
+  if (!resp.ok) throw new Error('brak pliku ' + url);
+  return resp.json();
+}
+
+// strzałka (grot) rysowana na płótnie — kolor nadaje warstwa (SDF)
+function obrazekStrzalki() {
+  const s = 32, c = document.createElement('canvas');
+  c.width = c.height = s;
+  const g = c.getContext('2d');
+  g.fillStyle = '#fff';
+  g.beginPath();
+  g.moveTo(s * 0.85, s / 2);
+  g.lineTo(s * 0.2, s * 0.15);
+  g.lineTo(s * 0.38, s / 2);
+  g.lineTo(s * 0.2, s * 0.85);
+  g.closePath();
+  g.fill();
+  return g.getImageData(0, 0, s, s);
+}
+
+function pokazInfo(props) {
+  if (!META) return;
+  const start = new Date(META.przebieg_iso);
+  document.getElementById('i-przebieg').textContent = `${pelna(start)} (${fmtUTC.format(start)} UTC)`;
+  document.getElementById('i-obliczono').textContent = pelna(new Date(META.obliczono_iso));
+  document.getElementById('i-modele').textContent =
+    (META.modele || []).map(m => NAZWY_MODELI[m] || m).join(', ');
+  const k = META.kroki;
+  document.getElementById('i-kroki').textContent =
+    k.length > 1 ? `${k.length} × co ${k[1] - k[0]} h (do +${k[k.length - 1]} h)` : `${k.length}`;
+}
+
+function pokazCzas(h) {
+  const teraz = document.getElementById('teraz');
+  const wzgl = document.getElementById('wzgl');
+  if (!META) { teraz.textContent = `+${h} h`; wzgl.textContent = ''; return; }
+  const start = new Date(META.przebieg_iso);
+  const t = new Date(start.getTime() + h * 3600e3);
+  teraz.textContent = pelna(t);
+  const dni = Math.floor(h / 24), godz = h % 24;
+  const opis = h === 0 ? 'analiza (start prognozy)'
+    : `+${h} h od startu prognozy` + (dni ? ` (${dni} d ${godz} h)` : '');
+  const doTeraz = (t - Date.now()) / 3600e3;
+  const wzglTeraz = Math.abs(doTeraz) < 1.5 ? ' · to jest teraz'
+    : doTeraz < 0 ? ` · ${Math.round(-doTeraz)} h temu` : ` · za ${Math.round(doTeraz)} h`;
+  wzgl.textContent = opis + wzglTeraz;
+}
+
+// kreski z datami pod suwakiem (każda północ czasu polskiego)
+function rysujDni() {
+  const el = document.getElementById('dni');
+  el.innerHTML = '';
+  if (!META || KROKI.length < 2) return;
+  const start = new Date(META.przebieg_iso).getTime();
+  const h0 = KROKI[0], h1 = KROKI[KROKI.length - 1];
+  const slider = document.getElementById('slider');
+  el.style.width = slider.offsetWidth + 'px';
+  for (let h = h0; h <= h1; h++) {
+    const t = new Date(start + h * 3600e3);
+    if (fmtGodz.format(t) !== '00:00') continue;
+    const i = KROKI.findIndex(k => k >= h);
+    const x = (i / (KROKI.length - 1)) * 100;
+    const s = document.createElement('span');
+    s.style.left = x + '%';
+    s.textContent = fmtDzien.format(t);
+    el.appendChild(s);
+  }
+}
+
+async function start() {
+  try {
+    META = await loadJSON('data/meta.json');
+    KROKI = META.kroki;
+  } catch (e) {
+    // starsze dane bez meta.json
+    KROKI = [];
+    for (let h = 0; h <= 72; h += 3) KROKI.push(h);
+  }
+
+  map.setSky({ 'sky-color': '#000010', 'horizon-color': '#1c1c2e', 'fog-color': '#0b1e3d' });
+  map.addImage('strzalka', obrazekStrzalki(), { sdf: true });
+
+  let first;
+  try {
+    first = await loadJSON(stepUrl(KROKI[0]));
+  } catch (e) {
+    document.getElementById('teraz').textContent = 'Brak danych — najpierw uruchom uruchom.bat';
+    return;
+  }
+  map.addSource('kroki', { type: 'geojson', data: first });
+
+  const jestLinia = ['has', 'rodzaj'];
+  const przezroczystosc = ['case', ['==', ['get', 'pewne'], false], 0.45, 1];
+
+  map.addLayer({
+    id: 'izobary', type: 'line', source: 'kroki',
+    filter: ['all', ['==', ['geometry-type'], 'LineString'], ['!', jestLinia]],
+    paint: { 'line-color': '#888', 'line-width': 0.6, 'line-opacity': 0.6 },
+  });
+  map.addLayer({
+    id: 'linie', type: 'line', source: 'kroki',
+    filter: jestLinia,
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': ['get', 'kolor'], 'line-width': 2, 'line-opacity': przezroczystosc },
+  });
+  map.addLayer({
+    id: 'strzalki', type: 'symbol', source: 'kroki',
+    filter: jestLinia,
+    layout: {
+      'symbol-placement': 'line',
+      'symbol-spacing': 70,
+      'icon-image': 'strzalka',
+      'icon-size': 0.55,
+      'icon-rotation-alignment': 'map',
+      'icon-allow-overlap': true,
+      'icon-ignore-placement': true,
+    },
+    paint: { 'icon-color': ['get', 'kolor'], 'icon-opacity': przezroczystosc },
+  });
+  map.addLayer({
+    id: 'centra', type: 'symbol', source: 'kroki',
+    filter: ['==', ['geometry-type'], 'Point'],
+    layout: {
+      'text-field': ['get', 'typ'],
+      'text-size': 20,
+      'text-font': ['Open Sans Semibold'],
+      'text-allow-overlap': true,
+    },
+    paint: {
+      'text-color': ['match', ['get', 'typ'], 'N', '#3498db', 'W', '#e74c3c', '#fff'],
+      'text-halo-color': '#000', 'text-halo-width': 1.5,
+    },
+  });
+
+  const slider = document.getElementById('slider');
+  slider.max = String(KROKI.length - 1);
+  pokazInfo(first.properties);
+  pokazCzas(KROKI[0]);
+  rysujDni();
+  window.addEventListener('resize', rysujDni);
+
+  let wczytywany = 0;
+  async function ustaw(i) {
+    const h = KROKI[i];
+    pokazCzas(h);
+    const nr = ++wczytywany;
+    try {
+      const dane = await loadJSON(stepUrl(h));
+      if (nr === wczytywany) map.getSource('kroki').setData(dane);
+    } catch (e) {
+      document.getElementById('wzgl').textContent += ' · (brak danych dla tego kroku)';
+    }
+  }
+  slider.addEventListener('input', () => ustaw(Number(slider.value)));
+
+  // odtwarzanie
+  const play = document.getElementById('play');
+  let timer = null;
+  play.addEventListener('click', () => {
+    if (timer) { clearInterval(timer); timer = null; play.textContent = '▶'; return; }
+    play.textContent = '❚❚';
+    timer = setInterval(() => {
+      const i = (Number(slider.value) + 1) % KROKI.length;
+      slider.value = String(i);
+      ustaw(i);
+    }, 700);
+  });
+}
+
+// pinezka: mój dom (ustawiona na centrum miasta — strona jest publiczna)
+const DOM = { nazwa: 'Łomża', lon: 22.06, lat: 53.18 };
+new maplibregl.Marker({ color: '#f1c40f', scale: 0.8 })
+  .setLngLat([DOM.lon, DOM.lat])
+  .setPopup(new maplibregl.Popup({ offset: 24, closeButton: false }).setText(DOM.nazwa))
+  .addTo(map);
+
+map.on('load', start);
+</script>
+</body>
+</html>
