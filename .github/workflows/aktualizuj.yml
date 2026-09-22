@@ -1,0 +1,52 @@
+# Automatyczna aktualizacja mapy: pobiera prognozy, liczy i publikuje na GitHub Pages.
+name: Aktualizuj mape
+
+on:
+  schedule:
+    # godziny w UTC (czas polski = UTC+2 latem, UTC+1 zimą);
+    # ok. 5 h po starcie przebiegów 00/06/12/18 UTC, gdy GFS i ICON-EU są już opublikowane
+    - cron: "30 5,11,17,23 * * *"
+  workflow_dispatch:        # przycisk "Run workflow" do ręcznego uruchomienia
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  aktualizuj:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Instalacja bibliotek
+        run: pip install -r requirements.txt
+
+      - name: Pobranie danych i przeliczenie
+        run: python run.py --bez-png
+
+      - name: Przygotowanie strony
+        run: |
+          mkdir -p _site
+          cp -r render/web/* _site/
+          touch _site/.nojekyll
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
