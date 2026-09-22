@@ -133,6 +133,18 @@ def main():
                 zapisz_meta(cfg, data, godzina, kroki_ok, sorted(modele))
         except Exception:
             traceback.print_exc()
+
+    if "punkt" in cfg and kroki_ok:
+        try:
+            from fetch import punkt as punkt_mod
+            start = datetime.strptime(data + godzina, "%Y%m%d%H").replace(tzinfo=timezone.utc)
+            p = cfg["punkt"]
+            dane = punkt_mod.pobierz(p, start, kroki_ok, model=p.get("model", "icon_eu"))
+            punkt_mod.zapisz(dane, cfg["wyjscie"]["web_dir"])
+            print(f"Prognoza punktowa dla {p['nazwa']}: OK")
+        except Exception as e:
+            print(f"Prognoza punktowa pominięta — {type(e).__name__}: {e}")
+
     print(f"\nGotowe: {len(kroki_ok)}/{len(kroki)} kroków zapisanych.")
     print(f"Wyniki: {cfg['wyjscie']['png_dir']}, {cfg['wyjscie']['geojson_dir']}")
     print("Mapę w przeglądarce otworzysz plikiem pokaz_mape.bat")

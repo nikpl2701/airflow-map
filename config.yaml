@@ -37,6 +37,13 @@ modele:
     wlaczony: false     # wyłączony: serwery ECMWF często odrzucają pobieranie (429/503)
     cykle: ["00", "12"]
 
+punkt:
+  # prognoza punktowa w tabeli obok mapy (Open-Meteo) + pinezka na mapie
+  nazwa: "Łomża"
+  lat: 53.18
+  lon: 22.06
+  model: icon_eu        # icon_eu albo gfs
+
 wyjscie:
   geojson_dir: "data/geojson"
   png_dir: "data/png"
