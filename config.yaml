@@ -20,13 +20,8 @@ progi:
   predkosc_min_ms: 3          # poniżej tego wiatr uznajemy za "cichy", przerywamy trasowanie
   konsensus_min_modeli: 2     # ile modeli musi się zgadzać żeby oznaczyć strefę jako pewną
 
-kroki_czasowe:
-  start_h: 0
-  koniec_h: 72
-  krok_h: 3
-
 modele:
-  # wlaczony: true/false — czy pobierać i liczyć dany model
+  # wlaczony: true/false — globalny wyłącznik (np. gdy serwer modelu pada)
   gfs:
     wlaczony: true
     cykle: ["00", "06", "12", "18"]
@@ -37,12 +32,27 @@ modele:
     wlaczony: false     # wyłączony: serwery ECMWF często odrzucają pobieranie (429/503)
     cykle: ["00", "12"]
 
+przebiegi:
+  # dwa niezależne przebiegi publikowane obok siebie na mapie (przełącznik w UI)
+  krotki:
+    start_h: 0
+    koniec_h: 72
+    krok_h: 3
+    modele: ["gfs", "icon_eu"]
+  dlugi:
+    start_h: 0
+    koniec_h: 168
+    krok_h: 6                        # rzadszy krok — dalej i tak mniej precyzji ma sens
+    modele: ["gfs"]                  # ICON-EU nie ma danych powyżej ~120 h
+    cykle_dziennie: ["00", "12"]     # licz ten przebieg tylko o tych porach — max 2×/dobę
+
 punkt:
   # prognoza punktowa w tabeli obok mapy (Open-Meteo) + pinezka na mapie
   nazwa: "Łomża"
   lat: 53.18
   lon: 22.06
   model: icon_eu        # icon_eu albo gfs
+  koniec_h: 168          # tabela zawsze pokrywa najdłuższy dostępny zakres (przebieg "dlugi")
 
 wyjscie:
   geojson_dir: "data/geojson"
