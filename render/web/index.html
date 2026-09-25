@@ -483,7 +483,12 @@ const DOM_MARKER = new maplibregl.Marker({ color: '#f1c40f', scale: 0.8 })
   .setPopup(new maplibregl.Popup({ offset: 24, closeButton: false }).setText(DOM.nazwa))
   .addTo(map);
 
-map.on('load', start);
+// start po wczytaniu mapy; gdyby zdarzenie 'load' nie przyszło (zdarza się przy wolnych
+// kafelkach lub w oknie podglądu), odpalamy awaryjnie chwilę po wczytaniu stylu
+let wystartowano = false;
+const odpal = () => { if (!wystartowano) { wystartowano = true; start(); } };
+map.on('load', odpal);
+map.on('style.load', () => setTimeout(odpal, 2000));
 </script>
 </body>
 </html>
