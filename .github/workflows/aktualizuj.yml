@@ -1,12 +1,20 @@
 # Automatyczna aktualizacja mapy: pobiera prognozy, liczy i publikuje na GitHub Pages.
+# Dwa niezależne przebiegi: "krotki" (0-72h, GFS+ICON-EU, 4x/dobę) i "dlugi"
+# (0-168h, tylko GFS, 2x/dobę — dłuższy zakres nie musi się liczyć częściej).
 name: Aktualizuj mape
 
 on:
   schedule:
-    # godziny w UTC (czas polski = UTC+2 latem, UTC+1 zimą);
-    # ok. 5 h po starcie przebiegów 00/06/12/18 UTC, gdy GFS i ICON-EU są już opublikowane
-    - cron: "30 5,11,17,23 * * *"
-  workflow_dispatch:        # przycisk "Run workflow" do ręcznego uruchomienia
+    # godziny w UTC; ok. 5 h po starcie przebiegów modeli, gdy dane są już opublikowane
+    - cron: "30 5,11,17,23 * * *"   # krotki, 4x/dobę
+    - cron: "45 6,18 * * *"          # dlugi, 2x/dobę
+  workflow_dispatch:
+    inputs:
+      profil:
+        description: "Który przebieg policzyć"
+        type: choice
+        options: ["oba", "krotki", "dlugi"]
+        default: "oba"
 
 permissions:
   contents: read
@@ -35,8 +43,29 @@ jobs:
       - name: Instalacja bibliotek
         run: pip install -r requirements.txt
 
-      - name: Pobranie danych i przeliczenie
-        run: python run.py --bez-png
+      - name: Ustal ktory przebieg liczymy
+        id: wybor
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "profil=${{ inputs.profil }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event.schedule }}" = "30 5,11,17,23 * * *" ]; then
+            echo "profil=krotki" >> "$GITHUB_OUTPUT"
+          else
+            echo "profil=dlugi" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Policz krotki (0-72h, GFS + ICON-EU)
+        if: steps.wybor.outputs.profil == 'krotki' || steps.wybor.outputs.profil == 'oba'
+        run: python run.py --profil krotki --bez-png
+
+      - name: Policz dlugi (0-168h, tylko GFS)
+        if: steps.wybor.outputs.profil == 'dlugi' || steps.wybor.outputs.profil == 'oba'
+        run: python run.py --profil dlugi --bez-png
+
+      - name: Zachowaj dane profilu, ktory dzis nie byl liczony
+        run: |
+          NAZWA_REPO="${GITHUB_REPOSITORY#*/}"
+          python zachowaj_stare_dane.py --strona "https://${{ github.repository_owner }}.github.io/${NAZWA_REPO}"
 
       - name: Przygotowanie strony
         run: |
