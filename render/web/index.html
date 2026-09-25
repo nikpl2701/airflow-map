@@ -15,13 +15,23 @@
     padding: 10px 12px; backdrop-filter: blur(4px);
   }
   #info { left: 12px; top: 12px; max-width: 290px; }
-  #info h1 { font-size: 14px; margin: 0 0 6px; font-weight: 600; }
+  #info h1 { font-size: 14px; margin: 0 0 8px; font-weight: 600; }
   #info .row { display: flex; gap: 6px; }
   #info .k { color: #9aa3b2; min-width: 92px; }
   #legenda { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,.12); }
   #legenda div { display: flex; align-items: center; gap: 8px; margin: 2px 0; }
   .kreska { width: 26px; height: 3px; border-radius: 2px; }
   .litera { width: 26px; text-align: center; font-weight: 700; font-size: 15px; }
+
+  #wybor { display: flex; flex-direction: column; gap: 5px; margin: 0 0 8px; }
+  .segment { display: flex; gap: 4px; }
+  .segment button {
+    flex: 1; background: rgba(255,255,255,.06); color: #ccc; border: 1px solid rgba(255,255,255,.14);
+    border-radius: 6px; padding: 5px 6px; font-size: 11.5px; cursor: pointer; white-space: nowrap;
+  }
+  .segment button.aktywny { background: #e74c3c; border-color: #e74c3c; color: #fff; }
+  .segment button:disabled { opacity: .32; cursor: not-allowed; }
+  .segment button:not(.aktywny):not(:disabled):hover { background: rgba(255,255,255,.14); }
 
   #czas { left: 12px; right: 12px; bottom: 20px; }
   #czas-gora { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 6px; }
@@ -73,6 +83,18 @@
 
 <div id="info" class="box">
   <h1>Przepływ powietrza na 850 hPa</h1>
+  <div id="wybor">
+    <div class="segment" id="sel-zakres">
+      <button data-val="krotki" class="aktywny">3 dni</button>
+      <button data-val="dlugi">7 dni</button>
+    </div>
+    <div class="segment" id="sel-model">
+      <button data-val="zgodnosc" class="aktywny">Zgodność</button>
+      <button data-val="gfs">GFS</button>
+      <button data-val="icon_eu">ICON-EU</button>
+    </div>
+  </div>
+  <div class="row"><span class="k">Widok</span><span id="i-warstwa">—</span></div>
   <div class="row"><span class="k">Start prognozy</span><span id="i-przebieg">—</span></div>
   <div class="row"><span class="k">Policzono</span><span id="i-obliczono">—</span></div>
   <div class="row"><span class="k">Modele</span><span id="i-modele">—</span></div>
@@ -80,7 +102,7 @@
   <div id="legenda">
     <div><span class="kreska" style="background:#e74c3c"></span>napływ ciepłego powietrza</div>
     <div><span class="kreska" style="background:#3498db"></span>napływ zimnego powietrza</div>
-    <div><span class="kreska" style="background:#aaa;opacity:.45"></span>bladsza linia = modele się nie zgadzają</div>
+    <div id="legenda-zgodnosc"><span class="kreska" style="background:#aaa;opacity:.45"></span>bladsza linia = modele się nie zgadzają</div>
     <div><span class="litera" style="color:#3498db">N</span>niż</div>
     <div><span class="litera" style="color:#e74c3c">W</span>wyż</div>
   </div>
@@ -120,11 +142,14 @@ const fmtDzien = new Intl.DateTimeFormat('pl-PL', { timeZone: STREFA, weekday: '
 const fmtGodz = new Intl.DateTimeFormat('pl-PL', { timeZone: STREFA, hour: '2-digit', minute: '2-digit' });
 const fmtUTC = new Intl.DateTimeFormat('pl-PL', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit' });
 const NAZWY_MODELI = { gfs: 'GFS', icon_eu: 'ICON-EU', ecmwf: 'ECMWF' };
+const NAZWY_WARSTW = { zgodnosc: 'Zgodność modeli', gfs: 'Tylko GFS', icon_eu: 'Tylko ICON-EU' };
 
 const pelna = d => `${fmtDzien.format(d)}, ${fmtGodz.format(d)}`;
 
-let META = null;      // z data/meta.json
+let META = {};         // cache: { krotki: {...}, dlugi: {...} } z data/meta_<profil>.json
 let KROKI = [];
+let PROFIL = 'krotki';
+let MODEL = 'zgodnosc';
 
 const map = new maplibregl.Map({
   container: 'map',
@@ -135,12 +160,25 @@ const map = new maplibregl.Map({
 
 map.on('style.load', () => map.setProjection({ type: 'globe' }));
 
-const stepUrl = h => `data/step_${String(h).padStart(3, '0')}.geojson`;
+const stepUrl = h => `data/${PROFIL}/${MODEL}/step_${String(h).padStart(3, '0')}.geojson`;
 
 async function loadJSON(url) {
   const resp = await fetch(url, { cache: 'no-store' });
   if (!resp.ok) throw new Error('brak pliku ' + url);
   return resp.json();
+}
+
+async function wczytajMeta(profil) {
+  if (!META[profil]) META[profil] = await loadJSON(`data/meta_${profil}.json`);
+  return META[profil];
+}
+
+function dostepnyModel(model, m) {
+  return model === 'zgodnosc' ? !!m.ma_zgodnosc : (m.modele || []).includes(model);
+}
+
+function odswiezAktywne(selektor, wartosc) {
+  document.querySelectorAll(`${selektor} button`).forEach(b => b.classList.toggle('aktywny', b.dataset.val === wartosc));
 }
 
 // strzałka (grot) rysowana na płótnie — kolor nadaje warstwa (SDF)
@@ -159,14 +197,17 @@ function obrazekStrzalki() {
   return g.getImageData(0, 0, s, s);
 }
 
-function pokazInfo(props) {
-  if (!META) return;
-  const start = new Date(META.przebieg_iso);
+function pokazInfo() {
+  const m = META[PROFIL];
+  if (!m) return;
+  document.getElementById('i-warstwa').textContent = NAZWY_WARSTW[MODEL] || MODEL;
+  document.getElementById('legenda-zgodnosc').style.display = MODEL === 'zgodnosc' ? '' : 'none';
+  const start = new Date(m.przebieg_iso);
   document.getElementById('i-przebieg').textContent = `${pelna(start)} (${fmtUTC.format(start)} UTC)`;
-  document.getElementById('i-obliczono').textContent = pelna(new Date(META.obliczono_iso));
+  document.getElementById('i-obliczono').textContent = pelna(new Date(m.obliczono_iso));
   document.getElementById('i-modele').textContent =
-    (META.modele || []).map(m => NAZWY_MODELI[m] || m).join(', ');
-  const k = META.kroki;
+    (m.modele || []).map(x => NAZWY_MODELI[x] || x).join(', ');
+  const k = m.kroki;
   document.getElementById('i-kroki').textContent =
     k.length > 1 ? `${k.length} × co ${k[1] - k[0]} h (do +${k[k.length - 1]} h)` : `${k.length}`;
 }
@@ -174,8 +215,9 @@ function pokazInfo(props) {
 function pokazCzas(h) {
   const teraz = document.getElementById('teraz');
   const wzgl = document.getElementById('wzgl');
-  if (!META) { teraz.textContent = `+${h} h`; wzgl.textContent = ''; return; }
-  const start = new Date(META.przebieg_iso);
+  const m = META[PROFIL];
+  if (!m) { teraz.textContent = `+${h} h`; wzgl.textContent = ''; return; }
+  const start = new Date(m.przebieg_iso);
   const t = new Date(start.getTime() + h * 3600e3);
   teraz.textContent = pelna(t);
   const dni = Math.floor(h / 24), godz = h % 24;
@@ -191,8 +233,9 @@ function pokazCzas(h) {
 function rysujDni() {
   const el = document.getElementById('dni');
   el.innerHTML = '';
-  if (!META || KROKI.length < 2) return;
-  const start = new Date(META.przebieg_iso).getTime();
+  const m = META[PROFIL];
+  if (!m || KROKI.length < 2) return;
+  const start = new Date(m.przebieg_iso).getTime();
   const h0 = KROKI[0], h1 = KROKI[KROKI.length - 1];
   const slider = document.getElementById('slider');
   el.style.width = slider.offsetWidth + 'px';
@@ -209,7 +252,7 @@ function rysujDni() {
 }
 
 // ---------- prognoza punktowa (tabela po prawej) ----------
-let PUNKT = null;
+let PUNKT = null;      // pełne dane z punkt.json (wszystkie godziny, niezależnie od profilu)
 let PUNKT_KLIK = () => {};
 const fmtKrotki = new Intl.DateTimeFormat('pl-PL', { timeZone: STREFA, weekday: 'short', day: 'numeric' });
 const KIERUNKI =['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
@@ -225,18 +268,24 @@ async function wczytajPunkt() {
   } catch (e) {
     return;   // brak pliku — panel zostaje ukryty
   }
-  // rysuj tylko kroki, które są też na mapie
-  PUNKT.kroki = PUNKT.kroki.filter(k => KROKI.includes(k.h));
   document.getElementById('punkt').hidden = false;
   document.getElementById('p-nazwa').textContent = PUNKT.nazwa;
   document.getElementById('p-model').textContent =
     `${NAZWY_MODELI[PUNKT.model] || PUNKT.model} · ${PUNKT.zrodlo}`;
   if (DOM_MARKER) DOM_MARKER.setLngLat([PUNKT.lon, PUNKT.lat]).getPopup().setText(PUNKT.nazwa);
+  zbudujTabelePunktu();
+  document.getElementById('p-zwin').addEventListener('click', () =>
+    document.getElementById('punkt').classList.toggle('zwiniety'));
+}
 
+// odbudowuje wiersze tabeli dla aktualnego KROKI (zależy od wybranego zakresu/profilu)
+function zbudujTabelePunktu() {
+  if (!PUNKT) return;
+  const wiersze = PUNKT.kroki.filter(k => KROKI.includes(k.h));
   const tb = document.querySelector('#p-tab tbody');
   tb.innerHTML = '';
   let poprzDzien = '';
-  PUNKT.kroki.forEach(k => {
+  wiersze.forEach(k => {
     const t = new Date(k.czas_iso);
     const g = fmtGodz.format(t);
     const dz = fmtKrotki.format(t).replace('.', '').replace(',', '');
@@ -258,9 +307,6 @@ async function wczytajPunkt() {
     tb.appendChild(tr);
     poprzDzien = dz;
   });
-
-  const panel = document.getElementById('punkt');
-  document.getElementById('p-zwin').addEventListener('click', () => panel.classList.toggle('zwiniety'));
 }
 
 function pokazPunkt(h) {
@@ -282,21 +328,72 @@ function pokazPunkt(h) {
   });
 }
 
-async function start() {
-  try {
-    META = await loadJSON('data/meta.json');
-    KROKI = META.kroki;
-  } catch (e) {
-    // starsze dane bez meta.json
-    KROKI = [];
-    for (let h = 0; h <= 72; h += 3) KROKI.push(h);
-  }
+// ---------- przełączanie zakresu (3 dni / 7 dni) i warstwy (Zgodność / GFS / ICON-EU) ----------
+async function ustawProfil(profil, zachowajKrok = false) {
+  const slider = document.getElementById('slider');
+  const poprzedniH = (zachowajKrok && KROKI.length) ? KROKI[Number(slider.value)] : null;
 
+  let m;
+  try {
+    m = await wczytajMeta(profil);
+  } catch (e) {
+    document.getElementById('wzgl').textContent = ` · brak danych dla zakresu „${profil}” (jeszcze nie policzone)`;
+    return;
+  }
+  PROFIL = profil;
+  KROKI = m.kroki;
+
+  document.querySelectorAll('#sel-model button').forEach(b => { b.disabled = !dostepnyModel(b.dataset.val, m); });
+  if (!dostepnyModel(MODEL, m)) MODEL = m.ma_zgodnosc ? 'zgodnosc' : m.modele[0];
+
+  odswiezAktywne('#sel-zakres', PROFIL);
+  odswiezAktywne('#sel-model', MODEL);
+
+  slider.max = String(KROKI.length - 1);
+  let i = 0;
+  if (poprzedniH !== null) {
+    i = KROKI.reduce((best, h, idx) => Math.abs(h - poprzedniH) < Math.abs(KROKI[best] - poprzedniH) ? idx : best, 0);
+  }
+  slider.value = String(i);
+
+  pokazInfo();
+  rysujDni();
+  zbudujTabelePunktu();
+  await ustaw(i);
+}
+
+async function ustawModel(model) {
+  const m = META[PROFIL];
+  if (!m || !dostepnyModel(model, m)) return;
+  MODEL = model;
+  odswiezAktywne('#sel-model', MODEL);
+  pokazInfo();
+  await ustaw(Number(document.getElementById('slider').value));
+}
+
+let wczytywany = 0;
+async function ustaw(i) {
+  const h = KROKI[i];
+  pokazCzas(h);
+  pokazPunkt(h);
+  const nr = ++wczytywany;
+  try {
+    const dane = await loadJSON(stepUrl(h));
+    if (nr === wczytywany) map.getSource('kroki').setData(dane);
+  } catch (e) {
+    document.getElementById('wzgl').textContent += ' · (brak danych dla tego kroku)';
+  }
+}
+
+async function start() {
   map.setSky({ 'sky-color': '#000010', 'horizon-color': '#1c1c2e', 'fog-color': '#0b1e3d' });
   map.addImage('strzalka', obrazekStrzalki(), { sdf: true });
 
   let first;
   try {
+    const m = await wczytajMeta('krotki');
+    KROKI = m.kroki;
+    if (!dostepnyModel(MODEL, m)) MODEL = m.ma_zgodnosc ? 'zgodnosc' : m.modele[0];
     first = await loadJSON(stepUrl(KROKI[0]));
   } catch (e) {
     document.getElementById('teraz').textContent = 'Brak danych — najpierw uruchom uruchom.bat';
@@ -351,31 +448,19 @@ async function start() {
   map.setProjection({ type: 'globe' });
   map.triggerRepaint();
 
+  await wczytajPunkt();
+  PUNKT_KLIK = i => { document.getElementById('slider').value = String(i); ustaw(i); };
+
+  document.querySelectorAll('#sel-zakres button').forEach(b =>
+    b.addEventListener('click', () => { if (!b.classList.contains('aktywny')) ustawProfil(b.dataset.val, true); }));
+  document.querySelectorAll('#sel-model button').forEach(b =>
+    b.addEventListener('click', () => { if (!b.disabled) ustawModel(b.dataset.val); }));
+
   const slider = document.getElementById('slider');
-  slider.max = String(KROKI.length - 1);
-  pokazInfo(first.properties);
-  pokazCzas(KROKI[0]);
-  rysujDni();
+  slider.addEventListener('input', () => ustaw(Number(slider.value)));
   window.addEventListener('resize', rysujDni);
 
-  await wczytajPunkt();
-  PUNKT_KLIK = i => { slider.value = String(i); ustaw(i); };
-  pokazPunkt(KROKI[0]);
-
-  let wczytywany = 0;
-  async function ustaw(i) {
-    const h = KROKI[i];
-    pokazCzas(h);
-    pokazPunkt(h);
-    const nr = ++wczytywany;
-    try {
-      const dane = await loadJSON(stepUrl(h));
-      if (nr === wczytywany) map.getSource('kroki').setData(dane);
-    } catch (e) {
-      document.getElementById('wzgl').textContent += ' · (brak danych dla tego kroku)';
-    }
-  }
-  slider.addEventListener('input', () => ustaw(Number(slider.value)));
+  await ustawProfil('krotki');   // ustawia info / dni / tabelę punktową i rysuje krok 0
 
   // odtwarzanie
   const play = document.getElementById('play');
